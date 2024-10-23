@@ -17,12 +17,23 @@ import "strconv"
 // 定义任务结构体
 type TaskRequest struct{}
 
-type TaskResponse struct {
-	TaskType  int
+type TaskType int
+
+type Task struct {
+	TaskType  TaskType
 	TaskId    int
 	Filename  string
 	ReduceNum int
 }
+
+// 定义各种任务类型
+const (
+	MapTask TaskType = iota
+	ReduceTask
+	WaitingTask
+	ExitTask
+)
+
 type ExampleArgs struct {
 	X int
 }

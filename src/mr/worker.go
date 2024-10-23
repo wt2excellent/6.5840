@@ -33,17 +33,36 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	// uncomment to send the Example RPC to the coordinator.
 	//CallExample()
+	// ----------------------------------------第一次实现----------------------------------
 	// GetTask
-	for i := 0; i < 2; i++ {
+	//for i := 0; i < 2; i++ {
+	//	task := GetTask()
+	//	DoMapTask(&task, mapf)
+	//}
+	// ----------------------------------------第二次调整-----------------------------------
+	// 对任务状态加入枚举
+	flag := true
+	for flag {
 		task := GetTask()
-		DoMapTask(&task, mapf)
+		switch task.TaskType {
+		case MapTask:
+			{
+				DoMapTask(&task, mapf)
+				TaskDone(&task)
+			}
+		case ReduceTask:
+		case WaitingTask:
+		case ExitTask:
+
+		default:
+		}
 	}
 }
 
 // Get a Task
-func GetTask() TaskResponse {
+func GetTask() Task {
 	taskReq := TaskRequest{}
-	taskResp := TaskResponse{}
+	taskResp := Task{}
 	ok := call("Coordinator.PullTask", &taskReq, &taskResp)
 	if ok {
 		fmt.Printf("success get task : %v\n", taskResp)
@@ -53,7 +72,7 @@ func GetTask() TaskResponse {
 	return taskResp
 }
 
-func DoMapTask(task *TaskResponse, mapf func(string, string) []KeyValue) {
+func DoMapTask(task *Task, mapf func(string, string) []KeyValue) {
 	/***
 	Map任务主要流程分为三部分：
 	1. 根据RPC调用获取到文件名，调用已经写好的Map函数生成中间文件(intermediate)
@@ -96,12 +115,23 @@ func DoMapTask(task *TaskResponse, mapf func(string, string) []KeyValue) {
 		}
 		enc := json.NewEncoder(tempFile)
 		for _, kv := range hashKV[i] {
-			err = enc.Encode(&kv)
+			err = enc.Encode(kv)
 			if err != nil {
 				log.Fatalf("encode error: %v", err)
 			}
 		}
 		tempFile.Close()
+	}
+}
+
+func TaskDone(task *Task) {
+	taskReq := task
+	taskResp := Task{}
+	ok := call("Coordinator.MarkDone", &taskReq, &taskResp)
+	if ok {
+		fmt.Printf("success mark task : %v\n", taskResp)
+	} else {
+		fmt.Printf("call failed!\n")
 	}
 }
 
