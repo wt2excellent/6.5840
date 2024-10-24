@@ -2,7 +2,12 @@ package mr
 
 import (
 	"fmt"
+	"io/ioutil"
 	"log"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 )
 import "net"
 import "os"
@@ -23,12 +28,17 @@ type State int
 
 // 保存任务的元数据
 type TaskMetaInfo struct {
-	State State
+	// 添加任务开始执行时间
+	StartTime time.Time
+	State     State
 	// 传入任务的指针，为了任务从通道中取出来之后，能够通过地址标记这个任务已经完成
 	TaskAdr *Task
 }
 
 // 任务状态类型
+// 任务对应的三种状态如何切换的：初始任务时将所有任务状态设置为Waiting，
+// worker调用rpc执行某个任务时，任务状态由Waiting==>Working
+// worker执行任务完成后调用rpc将任务状态有Working==>Done，至此任务完成，上面后两条暂时仅仅针对Map任务
 const (
 	Working State = iota // 此阶段在工作
 	Waiting              // 此阶段在等待执行, 当Map任务没有执行完成此时Reduce任务需要等待
@@ -58,6 +68,7 @@ func (t *TaskMetaHolder) judgeTaskState(taskId int) bool {
 	if !ok || taskInfo.State != Waiting {
 		return false
 	}
+	taskInfo.StartTime = time.Now()
 	taskInfo.State = Working
 	return true
 }
@@ -106,6 +117,7 @@ type Coordinator struct {
 	Files          []string
 	TaskId         int // 这个字段主要作用生成递增ID
 	TaskMetaHolder TaskMetaHolder
+	mu             sync.Mutex
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -135,6 +147,8 @@ func (c *Coordinator) server() {
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	ret := false
 
 	// Your code here.
@@ -166,6 +180,8 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	// Your code here.
 	c.MakeMapTask(files)
 	c.server()
+	// 开启一个探测器，监测任务执行时间是否过长
+	go c.crashHandler()
 	return &c
 }
 
@@ -175,7 +191,7 @@ func (c *Coordinator) MakeMapTask(files []string) {
 		task := Task{
 			TaskType:  MapTask,
 			TaskId:    taskID,
-			Filename:  file,
+			FileSlice: []string{file},
 			ReduceNum: c.ReduceNum,
 		}
 
@@ -184,6 +200,38 @@ func (c *Coordinator) MakeMapTask(files []string) {
 		c.TaskMetaHolder.acceptTaskMetaInfo(&taskMetaInfo)
 		c.MapChan <- &task
 	}
+}
+
+func (c *Coordinator) MakeReduceTask() {
+	for reduceNum := 0; reduceNum < c.ReduceNum; reduceNum++ {
+		taskID := c.genTaskId()
+		task := Task{
+			TaskType:  ReduceTask,
+			TaskId:    taskID,
+			FileSlice: c.selectReduceNum(reduceNum),
+			ReduceNum: c.ReduceNum,
+		}
+		// 保存任务初始状态
+		taskMetaInfo := TaskMetaInfo{State: Waiting, TaskAdr: &task}
+		c.TaskMetaHolder.acceptTaskMetaInfo(&taskMetaInfo)
+		c.ReduceChan <- &task
+	}
+}
+
+func (c *Coordinator) selectReduceNum(reduceNum int) []string {
+	var res []string
+	path, _ := os.Getwd()
+	files, err := ioutil.ReadDir(path)
+	if err != nil {
+		log.Fatal("[selectReduceNum] failure", err)
+		return res
+	}
+	for _, file := range files {
+		if strings.HasPrefix(file.Name(), "mr-") && strings.HasSuffix(file.Name(), strconv.Itoa(reduceNum)) {
+			res = append(res, file.Name())
+		}
+	}
+	return res
 }
 
 /*
@@ -198,8 +246,10 @@ func (c *Coordinator) genTaskId() int {
 }
 
 func (c *Coordinator) PullTask(taskReq *TaskRequest, taskResp *Task) error {
-	phase := c.Phase
-	switch phase {
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	switch c.Phase {
 	case MapPhase:
 		{
 			if len(c.MapChan) > 0 {
@@ -219,33 +269,58 @@ func (c *Coordinator) PullTask(taskReq *TaskRequest, taskResp *Task) error {
 		}
 	case ReducePhase:
 		{
-
+			if len(c.ReduceChan) > 0 {
+				*taskResp = *<-c.ReduceChan
+				if !c.TaskMetaHolder.judgeTaskState(taskResp.TaskId) {
+					fmt.Println("[PullTask] task state is ", c.TaskMetaHolder.allTaskDone())
+				}
+			} else {
+				taskResp.TaskType = WaitingTask
+				if c.TaskMetaHolder.allTaskDone() {
+					c.toNextPhase()
+				}
+				return nil
+			}
 		}
 	case AllDone:
 		{
-
+			taskResp.TaskType = ExitTask
 		}
 	default:
-		c.Phase = AllDone
+		panic("[PullTask] invalid Phase")
 	}
 	return nil
 }
 
 func (c *Coordinator) MarkDone(task *Task, taskResp *Task) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	switch task.TaskType {
 	case MapTask:
 		{
 			metaInfo, ok := c.TaskMetaHolder.TaskMeta[task.TaskId]
 			if ok && metaInfo.State == Working {
 				metaInfo.State = Done
-				fmt.Println("[MarkDone] task is done, the taskId is ", task.TaskId)
+				fmt.Printf("[MarkDone] task is done, the taskId is: %v, the taskType is %v\n", task.TaskId, task.TaskType)
 			} else {
-				fmt.Println("[MarkDone] error, the task not to be done ", task.TaskId)
+				fmt.Printf("[MarkDone] error, the task not to be done, taskId id : %v, the tasktype is %v\n ", task.TaskId, task.TaskType)
 			}
+			break
+		}
+	case ReduceTask:
+		{
+			metaInfo, ok := c.TaskMetaHolder.TaskMeta[task.TaskId]
+			if ok && metaInfo.State == Working {
+				metaInfo.State = Done
+				fmt.Printf("[MarkDone] task is done, the taskId is: %v, the taskType is %v\n", task.TaskId, task.TaskType)
+			} else {
+				fmt.Printf("[MarkDone] error, the task not to be done, taskId id : %v, the tasktype is %v\n ", task.TaskId, task.TaskType)
+			}
+			break
 		}
 	default:
 		{
-
+			panic("[MarkDone] invalid TaskType")
 		}
 	}
 	return nil
@@ -256,11 +331,41 @@ func (c *Coordinator) toNextPhase() {
 	case MapPhase:
 		{
 			//暂时将任务状态全部设置为已完成
-			c.Phase = AllDone
+			//c.Phase = AllDone
+			c.MakeReduceTask()
+			c.Phase = ReducePhase
 		}
 	case ReducePhase:
 		{
 			c.Phase = AllDone
 		}
+	default:
+		panic("[toNextPhase] invalid phase")
+	}
+}
+
+func (c *Coordinator) crashHandler() {
+	for {
+		// 关于这个休眠时间的思考：
+		// 如果不设置这个休眠时间，可能导致探测器协程不断获取锁，释放锁，不断循环，从而导致分发任务的方法PullTask无法获取锁
+		// 从而无法执行后续任务，这里类似时间片算法的使用了。
+		time.Sleep(2 * time.Second)
+		c.mu.Lock()
+		if c.Phase == AllDone {
+			c.mu.Unlock()
+			break
+		}
+		for _, metaInfo := range c.TaskMetaHolder.TaskMeta {
+			if metaInfo.State == Working && time.Since(metaInfo.StartTime) > 9*time.Second {
+				if metaInfo.TaskAdr.TaskType == MapTask {
+					c.MapChan <- metaInfo.TaskAdr
+					metaInfo.State = Waiting
+				} else if metaInfo.TaskAdr.TaskType == ReduceTask {
+					c.ReduceChan <- metaInfo.TaskAdr
+					metaInfo.State = Waiting
+				}
+			}
+		}
+		c.mu.Unlock()
 	}
 }

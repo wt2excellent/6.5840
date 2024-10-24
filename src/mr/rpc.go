@@ -22,7 +22,7 @@ type TaskType int
 type Task struct {
 	TaskType  TaskType
 	TaskId    int
-	Filename  string
+	FileSlice []string
 	ReduceNum int
 }
 

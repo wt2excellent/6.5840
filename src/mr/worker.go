@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"sort"
 	"strconv"
+	"time"
 )
 import "log"
 import "net/rpc"
@@ -16,6 +18,14 @@ type KeyValue struct {
 	Key   string
 	Value string
 }
+
+// for sorting by key.
+type BySort []KeyValue
+
+// for sorting by key.
+func (a BySort) Len() int           { return len(a) }
+func (a BySort) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a BySort) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 // use ihash(key) % NReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
@@ -51,10 +61,20 @@ func Worker(mapf func(string, string) []KeyValue,
 				TaskDone(&task)
 			}
 		case ReduceTask:
+			{
+				DoReduceTask(&task, reducef)
+				TaskDone(&task)
+			}
 		case WaitingTask:
+			{
+				fmt.Printf("the task is waiting, taskId : %v\n\n", task.TaskId)
+				time.Sleep(1 * time.Second)
+			}
 		case ExitTask:
-
-		default:
+			{
+				fmt.Println("Exit Task")
+				flag = false
+			}
 		}
 	}
 }
@@ -89,17 +109,17 @@ func DoMapTask(task *Task, mapf func(string, string) []KeyValue) {
 	随后将某个文件的所有词频根据Key也就是单词，根据单词的哈希值将单词分组，分组个数为ReduceNum
 	*/
 	var intermediate []KeyValue
-	fmt.Printf("worker is map taskId : %v, fileName : %v\n", task.TaskId, task.Filename)
-	file, err := os.Open(task.Filename)
+	fmt.Printf("worker is map taskId : %v, fileName : %v\n", task.TaskId, task.FileSlice[0])
+	file, err := os.Open(task.FileSlice[0])
 	if err != nil {
-		log.Fatalf("cannot open %v", task.Filename)
+		log.Fatalf("cannot open %v", task.FileSlice[0])
 	}
 	content, err := ioutil.ReadAll(file)
 	if err != nil {
-		log.Fatalf("cannot read %v", task.Filename)
+		log.Fatalf("cannot read %v", task.FileSlice[0])
 	}
 	file.Close()
-	intermediate = mapf(task.Filename, string(content))
+	intermediate = mapf(task.FileSlice[0], string(content))
 	reduceNum := task.ReduceNum
 	hashKV := make([][]KeyValue, reduceNum)
 	for _, value := range intermediate {
@@ -108,20 +128,70 @@ func DoMapTask(task *Task, mapf func(string, string) []KeyValue) {
 	}
 	// 放入中间文件
 	for i := 0; i < reduceNum; i++ {
-		fileName := "../tempfiles/mr-" + strconv.Itoa(task.TaskId) + "-" + strconv.Itoa(i)
+		fileName := "mr-" + strconv.Itoa(task.TaskId) + "-" + strconv.Itoa(i)
 		tempFile, err := os.Create(fileName)
 		if err != nil {
 			log.Fatalf("create temp file: %v failed.", fileName)
 		}
 		enc := json.NewEncoder(tempFile)
 		for _, kv := range hashKV[i] {
-			err = enc.Encode(kv)
+			err = enc.Encode(&kv)
 			if err != nil {
 				log.Fatalf("encode error: %v", err)
 			}
 		}
 		tempFile.Close()
 	}
+}
+
+func DoReduceTask(task *Task, reducef func(string, []string) string) {
+	reduceFileNum := task.TaskId
+	intermediate := shuffle(task.FileSlice)
+	dir, _ := os.Getwd()
+	//tempFile, err := ioutil.TempFile(dir, "mr-tmp-*")
+	tempFile, err := ioutil.TempFile(dir, "mr-tmp-*")
+	if err != nil {
+		log.Fatal("Failed to create temp file", err)
+	}
+	i := 0
+	// Debug
+	//fmt.Printf("the intermediate length is %v\n", len(intermediate))
+	for i < len(intermediate) {
+		j := i + 1
+		for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
+			j++
+		}
+		var values []string
+		for k := i; k < j; k++ {
+			values = append(values, intermediate[k].Value)
+		}
+		output := reducef(intermediate[i].Key, values)
+		fmt.Fprintf(tempFile, "%v %v\n", intermediate[i].Key, output)
+		i = j
+	}
+	tempFile.Close()
+	fn := fmt.Sprintf("mr-out-%d", reduceFileNum)
+	os.Rename(tempFile.Name(), fn)
+}
+
+func shuffle(files []string) []KeyValue {
+	var kva []KeyValue
+	for _, filepath := range files {
+		file, _ := os.Open(filepath)
+		dec := json.NewDecoder(file)
+		for {
+			var kv KeyValue
+			if err := dec.Decode(&kv); err != nil {
+				break
+			}
+			kva = append(kva, kv)
+		}
+		file.Close()
+		// 删除临时文件
+		//os.Remove(filepath)
+	}
+	sort.Sort(BySort(kva))
+	return kva
 }
 
 func TaskDone(task *Task) {
