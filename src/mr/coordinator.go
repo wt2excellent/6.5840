@@ -9,6 +9,7 @@ import "os"
 import "net/rpc"
 import "net/http"
 
+// 定义当前总体进度，分为三个阶段：Map阶段、Reduce阶段、Done阶段
 type Phase int
 
 const (
@@ -34,6 +35,7 @@ const (
 	Done                 // 此阶段已经做完
 )
 
+// 任务元信息结构体，主要存储任务进行的状态以及任务对应的地址「以能够随时更改任务状态」
 type TaskMetaHolder struct {
 	TaskMeta map[int]*TaskMetaInfo
 }
@@ -42,10 +44,11 @@ func (t *TaskMetaHolder) acceptTaskMetaInfo(taskMetaInfo *TaskMetaInfo) bool {
 	taskId := taskMetaInfo.TaskAdr.TaskId
 	meta, _ := t.TaskMeta[taskId]
 	if meta != nil {
-		t.TaskMeta[taskId] = taskMetaInfo
-	} else {
-		fmt.Println("[acceptTaskMetaInfo error]")
+		fmt.Printf("[acceptTaskMetaInfo] contain task which taskId : %v\n", taskId)
 		return false
+	} else {
+		//return false
+		t.TaskMeta[taskId] = taskMetaInfo
 	}
 	return true
 }
@@ -101,7 +104,7 @@ type Coordinator struct {
 	ReduceChan     chan *Task
 	ReduceNum      int
 	Files          []string
-	TaskId         int
+	TaskId         int // 这个字段主要作用生成递增ID
 	TaskMetaHolder TaskMetaHolder
 }
 
@@ -139,7 +142,7 @@ func (c *Coordinator) Done() bool {
 		fmt.Println("All tasks have Done")
 		ret = true
 	} else {
-		fmt.Println("Not All tasks have Done")
+		//fmt.Println("Not All tasks have Done")
 	}
 	return ret
 }
@@ -149,7 +152,7 @@ func (c *Coordinator) Done() bool {
 // nReduce is the number of reduce tasks to use.
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{
-		Phase:      0,
+		Phase:      MapPhase,
 		MapChan:    make(chan *Task, len(files)),
 		ReduceChan: make(chan *Task, nReduce),
 		ReduceNum:  nReduce,
@@ -157,6 +160,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		TaskMetaHolder: TaskMetaHolder{
 			TaskMeta: make(map[int]*TaskMetaInfo, nReduce+len(files)),
 		},
+		TaskId: 0,
 	}
 
 	// Your code here.

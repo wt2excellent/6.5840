@@ -129,7 +129,7 @@ func TaskDone(task *Task) {
 	taskResp := Task{}
 	ok := call("Coordinator.MarkDone", &taskReq, &taskResp)
 	if ok {
-		fmt.Printf("success mark task : %v\n", taskResp)
+		fmt.Printf("success mark task : %v\n", taskReq)
 	} else {
 		fmt.Printf("call failed!\n")
 	}
