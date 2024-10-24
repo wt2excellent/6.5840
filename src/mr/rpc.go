@@ -27,6 +27,8 @@ type Task struct {
 }
 
 // 定义各种任务类型
+// WaitingTask是否是必要的：是必要的，解决当Map任务没有全部完成成，此时调用GetTask返回WaitingTask，
+// Worker在接受到这个任务状态后进行短暂的休眠，随后继续调用任务执行后续流程
 const (
 	MapTask TaskType = iota
 	ReduceTask

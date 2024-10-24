@@ -14,19 +14,33 @@ import "os"
 import "net/rpc"
 import "net/http"
 
-// 定义当前总体进度，分为三个阶段：Map阶段、Reduce阶段、Done阶段
+// Phase 定义当前总体进度，分为三个阶段：Map阶段、Reduce阶段、Done阶段
 type Phase int
 
+// State 定义任务状态
+type State int
+
+// 当前整体进度，分为三个阶段
 const (
 	MapPhase Phase = iota
 	ReducePhase
 	AllDone
 )
 
-// 定义任务状态
-type State int
+// 任务状态类型
+// 任务对应的三种状态如何切换的：初始任务时将所有任务状态设置为Waiting，
+// worker调用rpc执行某个任务时，任务状态由Waiting==>Working
+// worker执行任务完成后调用rpc将任务状态有Working==>Done，至此任务完成，上面后两条暂时仅仅针对Map任务
+// worker执行Reduce任务时，原理仍然同上，状态由 Waiting==>Working==>Done之间切换
+const (
+	Working State = iota // 此阶段在工作
+	Waiting              // 此阶段在等待执行, 当Map任务没有执行完成此时Reduce任务需要等待
+	Done                 // 此阶段已经做完
+)
 
-// 保存任务的元数据
+// TaskMetaInfo 保存任务的元数据，任务开始时间、任务状态、任务对应的指针以便后续找到任务
+// 思考：为什么不将任务执行状态以及任务执行开始时间，定义到具体任务Task结构体中，也可以这样定义，但不符合要求
+// 这些信息不需要暴露给Worker，只要Coordinator维护这些信息，并且能够根据这些信息判断出哪些任务需要执行即可
 type TaskMetaInfo struct {
 	// 添加任务开始执行时间
 	StartTime time.Time
@@ -35,17 +49,7 @@ type TaskMetaInfo struct {
 	TaskAdr *Task
 }
 
-// 任务状态类型
-// 任务对应的三种状态如何切换的：初始任务时将所有任务状态设置为Waiting，
-// worker调用rpc执行某个任务时，任务状态由Waiting==>Working
-// worker执行任务完成后调用rpc将任务状态有Working==>Done，至此任务完成，上面后两条暂时仅仅针对Map任务
-const (
-	Working State = iota // 此阶段在工作
-	Waiting              // 此阶段在等待执行, 当Map任务没有执行完成此时Reduce任务需要等待
-	Done                 // 此阶段已经做完
-)
-
-// 任务元信息结构体，主要存储任务进行的状态以及任务对应的地址「以能够随时更改任务状态」
+// TaskMetaHolder 任务元信息结构体，主要存储任务进行的状态、任务开始时间以及任务对应的地址「以能够随时更改任务状态」
 type TaskMetaHolder struct {
 	TaskMeta map[int]*TaskMetaInfo
 }
@@ -54,15 +58,15 @@ func (t *TaskMetaHolder) acceptTaskMetaInfo(taskMetaInfo *TaskMetaInfo) bool {
 	taskId := taskMetaInfo.TaskAdr.TaskId
 	meta, _ := t.TaskMeta[taskId]
 	if meta != nil {
-		fmt.Printf("[acceptTaskMetaInfo] contain task which taskId : %v\n", taskId)
+		fmt.Printf("[acceptTaskMetaInfo] the taskId ：%v have contain metaInfo", taskId)
 		return false
 	} else {
-		//return false
 		t.TaskMeta[taskId] = taskMetaInfo
 	}
 	return true
 }
 
+// the function is to judge waiting task to working
 func (t *TaskMetaHolder) judgeTaskState(taskId int) bool {
 	taskInfo, ok := t.TaskMeta[taskId]
 	if !ok || taskInfo.State != Waiting {
@@ -73,8 +77,8 @@ func (t *TaskMetaHolder) judgeTaskState(taskId int) bool {
 	return true
 }
 
+// the function is to judge if all tasks have done, server subsequent phase
 func (t *TaskMetaHolder) allTaskDone() bool {
-	// 检查任务是否已经全部完成
 	var (
 		mapDoneNum      = 0
 		mapUnDoneNum    = 0
@@ -104,7 +108,6 @@ func (t *TaskMetaHolder) allTaskDone() bool {
 			return true
 		}
 	}
-
 	return false
 }
 
@@ -147,6 +150,7 @@ func (c *Coordinator) server() {
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
+	//The coordinator, as an RPC server, will be concurrent; don't forget to lock shared data
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	ret := false
@@ -218,6 +222,11 @@ func (c *Coordinator) MakeReduceTask() {
 	}
 }
 
+/*
+*构建Reduce任务，需要将Map任务存储的所有中间文件按照ReduceNum构建任务：
+一个File也就是一个Map任务，执行结果会根据Key的哈希值将一个File分散为ReduceNums个任务，如：mr-0-0\mr-0-1\mr-0-2
+末尾数字为需要分配给某个Reduce执行的文件，中间的数字为对于的Map的任务标识，也就是TaskId
+*/
 func (c *Coordinator) selectReduceNum(reduceNum int) []string {
 	var res []string
 	path, _ := os.Getwd()
@@ -246,7 +255,6 @@ func (c *Coordinator) genTaskId() int {
 }
 
 func (c *Coordinator) PullTask(taskReq *TaskRequest, taskResp *Task) error {
-
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	switch c.Phase {
@@ -272,7 +280,7 @@ func (c *Coordinator) PullTask(taskReq *TaskRequest, taskResp *Task) error {
 			if len(c.ReduceChan) > 0 {
 				*taskResp = *<-c.ReduceChan
 				if !c.TaskMetaHolder.judgeTaskState(taskResp.TaskId) {
-					fmt.Println("[PullTask] task state is ", c.TaskMetaHolder.allTaskDone())
+					fmt.Println("[PullTask] task state is ", c.TaskMetaHolder.TaskMeta[taskResp.TaskId].State)
 				}
 			} else {
 				taskResp.TaskType = WaitingTask
@@ -330,8 +338,6 @@ func (c *Coordinator) toNextPhase() {
 	switch c.Phase {
 	case MapPhase:
 		{
-			//暂时将任务状态全部设置为已完成
-			//c.Phase = AllDone
 			c.MakeReduceTask()
 			c.Phase = ReducePhase
 		}
@@ -344,6 +350,16 @@ func (c *Coordinator) toNextPhase() {
 	}
 }
 
+/*
+*
+为什么要设置这个探测器：参考如下回答。自己写的时候考虑到这个仅仅将当前对应的任务状态由Working更改为Waiting，并将其加入到对应的chan通道中
+但worker中并没有终止相应任务的执行，此举是否会造成一个worker执行多次？？？
+1.无论worker中一个任务是否执行多次，对于Map来说产生的中间文件名称是一样的，后续分配给新的worker后输出文件会覆盖前面的worker输出的文件，并且是从头填写
+The coordinator can't reliably distinguish between crashed workers, workers that are alive but have stalled for some reason,
+and workers that are executing but too slowly to be useful. The best you can do is have the coordinator wait for some amount of time,
+and then give up and re-issue the task to a different worker. For this lab, have the coordinator wait for ten seconds;
+after that the coordinator should assume the worker has died (of course, it might not have).
+*/
 func (c *Coordinator) crashHandler() {
 	for {
 		// 关于这个休眠时间的思考：

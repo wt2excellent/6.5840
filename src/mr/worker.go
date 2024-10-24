@@ -67,27 +67,29 @@ func Worker(mapf func(string, string) []KeyValue,
 			}
 		case WaitingTask:
 			{
-				fmt.Printf("the task is waiting, taskId : %v\n\n", task.TaskId)
-				time.Sleep(1 * time.Second)
+				//执行到此处说明Map任务有部分尚未完成，此时不能继续执行后续的Reduce任务，只有等待所有Map任务全部完成后才能执行Reduce
+				//所以在此处休眠一会
+				fmt.Printf("[Worker] the task is waiting, taskId : %v\n\n", task.TaskId)
+				time.Sleep(2 * time.Second)
 			}
 		case ExitTask:
 			{
-				fmt.Println("Exit Task")
+				fmt.Println("[Worker] Exit Task")
 				flag = false
 			}
 		}
 	}
 }
 
-// Get a Task
+// GetTask ：Get a Task
 func GetTask() Task {
 	taskReq := TaskRequest{}
 	taskResp := Task{}
 	ok := call("Coordinator.PullTask", &taskReq, &taskResp)
 	if ok {
-		fmt.Printf("success get task : %v\n", taskResp)
+		fmt.Printf("[GetTask] success get task : %v\n", taskResp)
 	} else {
-		fmt.Printf("call failed!\n")
+		fmt.Printf("[GetTask] call failed!\n")
 	}
 	return taskResp
 }
@@ -109,14 +111,14 @@ func DoMapTask(task *Task, mapf func(string, string) []KeyValue) {
 	随后将某个文件的所有词频根据Key也就是单词，根据单词的哈希值将单词分组，分组个数为ReduceNum
 	*/
 	var intermediate []KeyValue
-	fmt.Printf("worker is map taskId : %v, fileName : %v\n", task.TaskId, task.FileSlice[0])
+	fmt.Printf("[DoMapTask] worker is map taskId : %v, fileName : %v\n", task.TaskId, task.FileSlice[0])
 	file, err := os.Open(task.FileSlice[0])
 	if err != nil {
-		log.Fatalf("cannot open %v", task.FileSlice[0])
+		log.Fatalf("[DoMapTask] cannot open %v", task.FileSlice[0])
 	}
 	content, err := ioutil.ReadAll(file)
 	if err != nil {
-		log.Fatalf("cannot read %v", task.FileSlice[0])
+		log.Fatalf("[DoMapTask] cannot read %v", task.FileSlice[0])
 	}
 	file.Close()
 	intermediate = mapf(task.FileSlice[0], string(content))
@@ -131,13 +133,13 @@ func DoMapTask(task *Task, mapf func(string, string) []KeyValue) {
 		fileName := "mr-" + strconv.Itoa(task.TaskId) + "-" + strconv.Itoa(i)
 		tempFile, err := os.Create(fileName)
 		if err != nil {
-			log.Fatalf("create temp file: %v failed.", fileName)
+			log.Fatalf("[DoMapTask] create temp file: %v failed.", fileName)
 		}
 		enc := json.NewEncoder(tempFile)
 		for _, kv := range hashKV[i] {
 			err = enc.Encode(&kv)
 			if err != nil {
-				log.Fatalf("encode error: %v", err)
+				log.Fatalf("[DoMapTask] encode error: %v", err)
 			}
 		}
 		tempFile.Close()
@@ -145,13 +147,23 @@ func DoMapTask(task *Task, mapf func(string, string) []KeyValue) {
 }
 
 func DoReduceTask(task *Task, reducef func(string, []string) string) {
+	// 关于这个Reduce任务为什么需要先写入临时中间文件，随后等中间文件写完后，在重命名临时文件为最终文件
+	/**
+	To ensure that nobody observes partially written files in the presence of crashes,
+	the MapReduce paper mentions the trick of using a temporary file and atomically renaming it once it is completely written.
+	You can use ioutil.TempFile (or os.CreateTemp if you are running Go 1.17 or later) to create a temporary file
+	and os.Rename to atomically rename it.
+
+	最上面一句：确保发生崩溃时没有人观察到部分写入的文件
+	使用中间临时文件在发生崩溃时临时文件不会保存，此外使用中间文件命令和最终输出文件名称不一样
+	能够保证输出的符合要求格式的文件都是完整的，不完整的文件即使没有删除，由于命名和要求格式不一样也不会考虑
+	*/
 	reduceFileNum := task.TaskId
 	intermediate := shuffle(task.FileSlice)
 	dir, _ := os.Getwd()
-	//tempFile, err := ioutil.TempFile(dir, "mr-tmp-*")
-	tempFile, err := ioutil.TempFile(dir, "mr-tmp-*")
+	tempFile, err := os.CreateTemp(dir, "mr-tmp-*")
 	if err != nil {
-		log.Fatal("Failed to create temp file", err)
+		log.Fatal("[DoReduceTask] Failed to create temp file", err)
 	}
 	i := 0
 	// Debug
@@ -199,9 +211,9 @@ func TaskDone(task *Task) {
 	taskResp := Task{}
 	ok := call("Coordinator.MarkDone", &taskReq, &taskResp)
 	if ok {
-		fmt.Printf("success mark task : %v\n", taskReq)
+		fmt.Printf("[TaskDone] success mark task : %v\n", taskReq)
 	} else {
-		fmt.Printf("call failed!\n")
+		fmt.Printf("[TaskDone] call failed!\n")
 	}
 }
 
