@@ -66,12 +66,14 @@ func (ck *Clerk) PutAppend(key string, value string, op string) string {
 	}
 	putAppendReply := PutAppendReply{}
 	for !ck.server.Call("KVServer."+op, &putAppendArgs, &putAppendReply) {
+		// 加一点睡眠的代码，等待一个间隔后再次发起RPC调用
 	}
 	deleteArgs := PutAppendArgs{
 		Identity:    strconv.Itoa(int(identifyInt64)),
 		OperateType: Delete,
 	}
 	for !ck.server.Call("KVServer."+op, &deleteArgs, &PutAppendReply{}) {
+		// 加一点睡眠的代码，等待一个间隔后再次发起RPC调用
 	}
 	return putAppendReply.Value
 }
