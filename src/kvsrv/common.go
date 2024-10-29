@@ -1,5 +1,12 @@
 package kvsrv
 
+type OperateType int
+
+const (
+	Modify OperateType = iota
+	Delete
+)
+
 // Put or Append
 type PutAppendArgs struct {
 	Key   string
@@ -7,6 +14,8 @@ type PutAppendArgs struct {
 	// You'll have to add definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	Identity    string
+	OperateType OperateType
 }
 
 type PutAppendReply struct {
