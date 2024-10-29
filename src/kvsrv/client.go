@@ -67,11 +67,13 @@ func (ck *Clerk) PutAppend(key string, value string, op string) string {
 	putAppendReply := PutAppendReply{}
 	for !ck.server.Call("KVServer."+op, &putAppendArgs, &putAppendReply) {
 	}
-	retStr := putAppendReply.Value
-	putAppendArgs.OperateType = Delete
-	for !ck.server.Call("KVServer."+op, &putAppendArgs, &putAppendReply) {
+	deleteArgs := PutAppendArgs{
+		Identity:    strconv.Itoa(int(identifyInt64)),
+		OperateType: Delete,
 	}
-	return retStr
+	for !ck.server.Call("KVServer."+op, &deleteArgs, &PutAppendReply{}) {
+	}
+	return putAppendReply.Value
 }
 
 func (ck *Clerk) Put(key string, value string) {

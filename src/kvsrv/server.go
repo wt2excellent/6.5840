@@ -25,16 +25,13 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
-	key := args.Key
-	val := kv.kvMap[key]
-	reply.Value = val
-	return
+	reply.Value = kv.kvMap[args.Key]
 }
 
 func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
-	// Your code here.
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
+	// Your code here.
 	if args.OperateType == Delete {
 		delete(kv.identifySet, args.Identity)
 		return
@@ -43,9 +40,7 @@ func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
 		return
 	}
 	kv.identifySet[args.Identity] = ""
-	key := args.Key
-	val := args.Value
-	kv.kvMap[key] = val
+	kv.kvMap[args.Key] = args.Value
 }
 
 func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
