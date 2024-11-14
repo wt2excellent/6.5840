@@ -186,6 +186,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		reply.Success = false
 		return
 	} else {
+		// 确认当前节点跟随者的地位,并心跳检测后进行时间重置
 		rf.state = Follower
 		rf.votedFor = args.LeaderId
 		rf.currentTerm = args.Term
@@ -369,7 +370,7 @@ func (rf *Raft) ticker() {
 			switch rf.state {
 			case Follower: // 跟随者变为候选者
 				rf.state = Candidate
-				fallthrough
+				fallthrough // 继续执行下一个case分支，而不再重新检查条件
 			case Candidate: // 成为候选者开始拉票
 				rf.currentTerm++
 				rf.votedFor = rf.me
