@@ -202,15 +202,15 @@ type RequestVoteArgs struct {
 	Term         int //候选人的任期
 	CandidateId  int //候选人ID
 	LastLogIndex int //候选人最后的日志索引
-	LastLogTerm  int
+	LastLogTerm  int //上一个日志的任期，只有有日志时此条记录才有意义
 }
 
 // example RequestVote RPC reply structure.
 // field names must start with capital letters!
 type RequestVoteReply struct {
 	// Your data here (3A).
-	Term        int
-	VoteGranted bool
+	Term        int  // 投票者raft节点的任期
+	VoteGranted bool // 是否投票标记，true代表投票，false代表不投票
 }
 
 // example RequestVote RPC handler.
