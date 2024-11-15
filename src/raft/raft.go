@@ -106,12 +106,11 @@ type Raft struct {
 func (rf *Raft) GetState() (int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	var term int
-	var isleader bool = false
+	term := rf.currentTerm
+	isleader := false
 	if rf.state == Leader {
 		isleader = true
 	}
-	term = rf.currentTerm
 	// Your code here (3A).
 	return term, isleader
 }
@@ -268,10 +267,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 // that the caller passes the address of the reply struct with &, not
 // the struct itself.
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
-	// 收到过期的RPC
-	//if args.Term < rf.currentTerm {
-	//	return false
-	//}
 	// RPC调用失败后继续重试直至成功
 	if ok := rf.peers[server].Call("Raft.RequestVote", args, reply); ok {
 		for !ok {
@@ -281,6 +276,10 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	//fmt.Printf("[sendRequestVote] args is %v, reply is %v\n", args, reply)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	// 收到过期的RPC
+	//if args.Term < rf.currentTerm {
+	//	return false
+	//}
 	if reply.VoteGranted {
 		// 进行投票
 		rf.voteCount++
@@ -305,6 +304,8 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	}
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	// 收到过期的RPC,此时直接将其抛弃，为什么会出现args.Term < rf.currentTerm，RPC调用是并行的，可能同时存在多个
+	// 此时某个RPC调用返回并告知当然节点Term落后，从而更新了当前Term
 	//if args.Term < rf.currentTerm {
 	//	return false
 	//}
