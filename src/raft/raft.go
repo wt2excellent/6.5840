@@ -90,8 +90,8 @@ type Raft struct {
 	currentTerm int
 	votedFor    int
 	log         []LogEntry
-	commitIndex int
-	lastApplied int
+	commitIndex int // 已知可以提交的日志条目索引
+	lastApplied int // 已经提交了的日志条目索引
 	nextIndex   []int
 	matchIndex  []int
 
@@ -180,11 +180,18 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	// 当前节点的任期比领导者任期大，此时领导降为跟随者
+	reply.Term = rf.currentTerm
+	reply.Success = false
 	if args.Term < rf.currentTerm {
-		reply.Term = rf.currentTerm
-		reply.Success = false
 		return
 	} else {
+		//if args.PrevLogIndex >= len(rf.log) {
+		//	return
+		//}
+		//if rf.log[args.PrevLogIndex].Term != args.Term {
+		//	rf.log = rf.log[:args.PrevLogIndex]
+		//}
+
 		// 确认当前节点跟随者的地位,并心跳检测后进行时间重置
 		rf.state = Follower
 		rf.votedFor = args.LeaderId
@@ -232,6 +239,13 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	// 没有投过票，或者出现上述情况，进行投票
 	if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
+		// 确保Candidate的LogEntry是最新的
+		//if len(rf.log) > 0 && rf.log[len(rf.log)-1].Term == args.LastLogTerm && len(rf.log) > args.LastLogIndex+1 {
+		//	return
+		//}
+		//if len(rf.log) > 0 && rf.log[len(rf.log)-1].Term > args.LastLogTerm {
+		//	return
+		//}
 		rf.votedFor = args.CandidateId
 		reply.VoteGranted = true //投票
 		// 投完票后，本节点此时需要重置超时时间
@@ -277,9 +291,9 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	// 收到过期的RPC
-	//if args.Term < rf.currentTerm {
-	//	return false
-	//}
+	if args.Term < rf.currentTerm {
+		return false
+	}
 	if reply.VoteGranted {
 		// 进行投票
 		rf.voteCount++
@@ -306,9 +320,9 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	defer rf.mu.Unlock()
 	// 收到过期的RPC,此时直接将其抛弃，为什么会出现args.Term < rf.currentTerm，RPC调用是并行的，可能同时存在多个
 	// 此时某个RPC调用返回并告知当然节点Term落后，从而更新了当前Term
-	//if args.Term < rf.currentTerm {
-	//	return false
-	//}
+	if args.Term < rf.currentTerm {
+		return false
+	}
 	if !reply.Success {
 		rf.state = Follower
 		rf.currentTerm = reply.Term
@@ -333,11 +347,15 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 // term. the third return value is true if this server believes it is
 // the leader.
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := -1
+	index := -1 // index为-1说明之前没有日志提交记录，只有出现日志提交记录时，index才不为-1
 	term := -1
 	isLeader := true
 
 	// Your code here (3B).
+	isLeader = rf.state == Leader
+	if isLeader == false {
+		return index, term, false
+	}
 
 	return index, term, isLeader
 }
