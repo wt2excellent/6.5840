@@ -287,14 +287,17 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	// 没有投过票，或者出现上述情况，进行投票
 	if rf.votedFor == -1 {
-		currentLogIndex := len(rf.log) - 1
+		//
+		currentLogIndex := len(rf.log)
 		currentLogTerm := 0
-		if currentLogIndex >= 0 {
-			currentLogTerm = rf.log[currentLogIndex].Term
+		if currentLogIndex > 0 {
+			currentLogTerm = rf.log[currentLogIndex-1].Term
 		}
 
 		// 满足论文说明的第二个匹配条件，保证投票时日志是最新的
-		if args.LastLogTerm < currentLogIndex || args.LastLogTerm < currentLogTerm {
+		// 1. 日志有不同的任期，此时有更大的任期的节点日志更新。
+		// 2. 日志尾部的条目对应的任期相同，此时比较Index，下标更大的是最新的
+		if args.LastLogTerm < currentLogTerm || (len(rf.log) > 0 && args.LastLogTerm == rf.log[len(rf.log)-1].Term && args.LastLogIndex < len(rf.log)) {
 			reply.VoteState = Expire
 			reply.VoteGranted = false
 			reply.Term = rf.currentTerm
@@ -322,10 +325,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		reply.VoteGranted = false
 		rf.voteCount = 0
 		if rf.votedFor != args.CandidateId {
-			// 当前节点是来自同一轮的，不同的竞选者，或者本raft节点本身就是竞选者
+			// 当前节点是来自同一轮的，不同的竞选者,由于已经投过票了，此时直接返回
 			return
 		} else {
-			//当前节点的票已经给了同一个人，但由于网络等原因，又发送了一次投票请求
+			//当前节点的票已经给了同一个人，但由于网络等原因，又发送了一次投票请求，此时再此重置本节点的状态
 			rf.state = Follower
 		}
 		rf.timer.reset()
@@ -568,9 +571,9 @@ func (rf *Raft) ticker() {
 						Entries:      nil,
 						LeaderCommit: rf.commitIndex,
 					}
-					if args.PrevLogIndex >= 0 {
-						args.PrevLogTerm = rf.log[args.PrevLogIndex].Term
-					}
+					//if args.PrevLogIndex >= 0 {
+					//	args.PrevLogTerm = rf.log[args.PrevLogIndex].Term
+					//}
 					reply := &AppendEntriesReply{}
 					go rf.sendAppendEntries(i, args, reply)
 				}
