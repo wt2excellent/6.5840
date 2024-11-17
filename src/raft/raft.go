@@ -234,7 +234,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	// 如果当前节点提交的Index比传过来的LogIndex还高，说明当前节点的日志已经超前需要还过去
-	if args.PrevLogIndex != -1 && args.PrevLogIndex < rf.lastApplied {
+	if args.PrevLogIndex < rf.lastApplied {
 		reply.AppendState = AppendCommit
 		reply.Term = rf.currentTerm
 		reply.UpNextIndex = rf.lastApplied + 1
@@ -697,6 +697,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.votedFor = -1
 	rf.currentTerm = 0
 	rf.log = make([]LogEntry, 0)
+	/**
+	写的这个版本LogIndex按照论文中的图7,默认1开始，但具体存储日志的数组，是从0开始的
+	*/
 	rf.commitIndex = 0
 	rf.lastApplied = 0
 	rf.nextIndex = make([]int, len(rf.peers))
