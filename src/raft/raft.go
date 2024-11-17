@@ -120,7 +120,7 @@ type Raft struct {
 	voteCount int    //节点获取的投票数量
 	timer     Timer
 
-	// 日志存储
+	// 日志存储-3B使用
 	applyCh chan ApplyMsg
 }
 
@@ -240,17 +240,17 @@ type RequestVoteArgs struct {
 	// Your data here (3A, 3B).
 	Term         int //候选人的任期
 	CandidateId  int //候选人ID
-	LastLogIndex int //候选人最后的日志索引
-	LastLogTerm  int //上一个日志的任期，只有有日志时此条记录才有意义
+	LastLogIndex int //竞选人日志条目最后索引
+	LastLogTerm  int //竞选人日志条目最后索引对应的任期
 }
 
 // example RequestVote RPC reply structure.
 // field names must start with capital letters!
 type RequestVoteReply struct {
 	// Your data here (3A).
-	Term        int  // 投票者raft节点的任期
-	VoteGranted bool // 是否投票标记，true代表投票，false代表不投票
-	VoteState   VoteState
+	Term        int       // 投票者raft节点的任期
+	VoteGranted bool      // 是否投票标记，true代表投票，false代表不投票
+	VoteState   VoteState // 投票状态,包含四种状态：正常投票、本任期Term内已经投过票、投票过期（网络分区、日志不是最新的）、raft节点死亡
 }
 
 // example RequestVote RPC handler.
@@ -294,7 +294,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		}
 
 		// 满足论文说明的第二个匹配条件，保证投票时日志是最新的
-		if args.LastLogIndex < currentLogIndex || args.LastLogTerm < currentLogTerm {
+		if args.LastLogTerm < currentLogIndex || args.LastLogTerm < currentLogTerm {
 			reply.VoteState = Expire
 			reply.VoteGranted = false
 			reply.Term = rf.currentTerm
@@ -410,7 +410,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 				rf.state = Leader
 				rf.nextIndex = make([]int, len(rf.peers))
 				for i := 0; i < len(rf.nextIndex); i++ {
-					rf.nextIndex[i] = len(rf.log)
+					rf.nextIndex[i] = len(rf.log) + 1
 				}
 				rf.timer.resetHeartBeat()
 			}
@@ -544,7 +544,7 @@ func (rf *Raft) ticker() {
 					args := &RequestVoteArgs{
 						Term:         rf.currentTerm,
 						CandidateId:  rf.me,
-						LastLogIndex: len(rf.log) - 1,
+						LastLogIndex: len(rf.log),
 						LastLogTerm:  0,
 					}
 					if len(rf.log) > 0 {
@@ -563,7 +563,7 @@ func (rf *Raft) ticker() {
 					args := &AppendEntriesArgs{
 						Term:         rf.currentTerm,
 						LeaderId:     rf.me,
-						PrevLogIndex: len(rf.log) - 1,
+						PrevLogIndex: 0,
 						PrevLogTerm:  0,
 						Entries:      nil,
 						LeaderCommit: rf.commitIndex,
