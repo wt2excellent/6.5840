@@ -223,8 +223,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	// 更新日志出现冲突，
 	// 首先要保证自身len(rf)大于0否则数组越界
-	// 1、 如果preLogIndex的大于当前日志的最大的下标说明跟随者缺失日志，拒绝附加日志
-	// 2、 如果preLog出`的任期和preLogIndex处的任期和preLogTerm不相等，那么说明日志存在conflict,拒绝附加日志
+	// 1、 如果preLogIndex大于当前日志的最大的下标说明跟随者缺失日志，拒绝附加日志
+	// 2、 preLogIndex处的任期和preLogTerm不相等，那么说明日志存在conflict,拒绝附加日志
 	if args.PrevLogIndex > 0 && (args.PrevLogIndex > len(rf.log) || args.PrevLogTerm != rf.log[args.PrevLogIndex-1].Term) {
 		reply.AppendState = MisMatch
 		reply.Term = rf.currentTerm
